@@ -1,6 +1,6 @@
-using NUnit;
+using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 [RequireComponent(typeof(Rigidbody))]
 public class WallMovement : MonoBehaviour
@@ -11,8 +11,11 @@ public class WallMovement : MonoBehaviour
     private bool _isGrounded;
     private Vector3 _relativeUp;
     private bool _previousFacingUp;
-    private const string EnvironmentTag = "Environment";
+    private float _groundCheckDistance = 0.5f;
+    protected static RaycastHit[] hitCache = new RaycastHit[25];
 
+    public Transform closestPointVisual; 
+    
     [Tooltip("Threshold angle for deciding between up and down")]
     [SerializeField]
     [Range(0, 90)]
@@ -21,6 +24,8 @@ public class WallMovement : MonoBehaviour
     [Tooltip("How fast the player will go")]
     [SerializeField]
     private float movementSpeed = 4f;
+
+    private int _environmentLayer;
     
     private void Awake()
     {
@@ -32,10 +37,12 @@ public class WallMovement : MonoBehaviour
     {
         _mainCamera = Camera.main?.transform;
         _relativeUp = transform.up;
+        _environmentLayer = LayerMask.GetMask("Environment");
     }
 
     private void FixedUpdate()
     {
+        GetGroundedState();
         _rigidbody.linearVelocity = GetDesiredMovement() * movementSpeed;
         var rotation = Quaternion.FromToRotation(Vector3.up, _relativeUp);
         transform.rotation = Quaternion.Lerp(transform.rotation, rotation, 10 * Time.deltaTime);
@@ -77,9 +84,6 @@ public class WallMovement : MonoBehaviour
         var planeRotation = Quaternion.FromToRotation(worldUp, planeNormal);
         var playerRotation = Quaternion.AngleAxis(yaw, worldUp);
         var movementForward = planeRotation * (playerRotation * Vector3.forward);
-        
-        Debug.DrawRay(transform.position, planeNormal, Color.green, 0);
-        Debug.DrawRay(transform.position, movementForward, Color.blue, 0);
 
         var movementRotation = Quaternion.LookRotation(movementForward, planeNormal);
         var axisMovement = movementRotation * _inputMovement;
@@ -94,19 +98,59 @@ public class WallMovement : MonoBehaviour
         _inputMovement = new Vector3(inputX, 0, inputY);
     }
 
-    private void OnCollisionStay(Collision other)
+    private void GetGroundedState()
+    {
+        var closest = new RaycastHit() { distance = Mathf.Infinity };
+        var hitSomething = false;
+        var hits = GetHits();
+        foreach (var hit in hits)
+        {
+            if (hit.distance < closest.distance)
+            {
+                closest = hit;
+            }
+            hitSomething = true;
+        }
+
+        if (!hitSomething) return;
+
+        _isGrounded = true;
+        _relativeUp = closest.normal;
+        var directionToGround = closest.distance * -_relativeUp;
+        //Debug.Log($"distance: {closest.distance - 0.25f}");
+        
+        // Snap player down
+        transform.position += Vector3.ClampMagnitude(directionToGround, Mathf.Infinity * Time.fixedDeltaTime);
+        closestPointVisual.position = closest.point;
+    }
+
+    private IEnumerable<RaycastHit> GetHits()
+    {
+        hitCache = new RaycastHit[25];
+        var hitCount = Physics.SphereCastNonAlloc(
+            transform.position, 
+            0.45f, 
+            -_relativeUp, 
+            hitCache, 
+            _groundCheckDistance,
+            _environmentLayer);
+
+        return Enumerable.Range(0, hitCount).Select(i => hitCache[i])
+            .Where(hit => hit.transform != transform);
+    }
+    
+
+    /*private void OnCollisionStay(Collision other)
     {
         if (!other.transform.CompareTag(EnvironmentTag)) return;
         _isGrounded = true;
         _relativeUp = other.GetContact(0).normal;
         Debug.DrawRay(transform.position, _relativeUp, Color.magenta);
-    }
+    }*/
 
     /*private void OnCollisionExit(Collision other)
     {
         if (!other.transform.CompareTag(EnvironmentTag)) return;
-        Debug.Log("Exiting for some reason?");
         _isGrounded = false;
-        _relativeUp = Vector3.up;
     }*/
 }
