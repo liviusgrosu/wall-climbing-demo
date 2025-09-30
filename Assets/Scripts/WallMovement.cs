@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -5,11 +6,12 @@ using UnityEngine;
 [RequireComponent(typeof(Rigidbody))]
 public class WallMovement : MonoBehaviour
 {
+    public static WallMovement Instance;
     private Transform _mainCamera;
     private Rigidbody _rigidbody;
     private Vector3 _inputMovement;
-    private bool _isGrounded;
-    private Vector3 _relativeUp;
+
+    
     private bool _previousFacingUp;
     private float _groundCheckDistance = 0.5f;
     protected static RaycastHit[] hitCache = new RaycastHit[25];
@@ -27,8 +29,55 @@ public class WallMovement : MonoBehaviour
 
     private int _environmentLayer;
     
+    private bool _isGrounded;
+    private bool IsGrounded
+    {
+        get => _isGrounded;
+        set
+        {
+            _isGrounded = value;
+            OnGroundedChanged?.Invoke(_isGrounded);
+        }
+    }
+    
+    private Vector3 _relativeUp;
+    private Vector3 RelativeUp
+    {
+        get => _relativeUp;
+        set
+        {
+            _relativeUp = value;
+            OnRelativeUpChanged?.Invoke(_relativeUp);
+        }
+    }
+
+    private bool _facingUp;
+    private bool FacingUp
+    {
+        get => _facingUp;
+        set
+        {
+            _facingUp = value;
+            OnFacingUpChange?.Invoke(_facingUp);
+        }
+    }
+    
+    // Actions
+    public static event Action<Vector3> OnRelativeUpChanged;
+    public static event Action<bool> OnGroundedChanged;
+    public static event Action<float> OnSpeedChange;
+    public static event Action<bool> OnFacingUpChange;
+    public static event Action<bool> OnYawInvertedChange;
+    
     private void Awake()
     {
+        if (Instance != this && Instance != null)
+        {
+            Destroy(gameObject);
+        }
+
+        Instance = this;
+            
         _rigidbody = GetComponent<Rigidbody>();
         _rigidbody.useGravity = false;
     }
@@ -36,7 +85,7 @@ public class WallMovement : MonoBehaviour
     void Start()
     {
         _mainCamera = Camera.main?.transform;
-        _relativeUp = transform.up;
+        RelativeUp = transform.up;
         _environmentLayer = LayerMask.GetMask("Environment");
     }
 
@@ -44,46 +93,59 @@ public class WallMovement : MonoBehaviour
     {
         GetGroundedState();
         _rigidbody.linearVelocity = GetDesiredMovement() * movementSpeed;
-        var rotation = Quaternion.FromToRotation(Vector3.up, _relativeUp);
+        var rotation = Quaternion.FromToRotation(Vector3.up, RelativeUp);
         transform.rotation = Quaternion.Lerp(transform.rotation, rotation, 10 * Time.deltaTime);
+        
+        OnSpeedChange?.Invoke(_rigidbody.linearVelocity.magnitude);
     }
     
     private void Update()
     {
         GetInputMovement();
-        //Debug.DrawRay(transform.position, _relativeUp, Color.magenta);
+        //Debug.DrawRay(transform.position, RelativeUp, Color.magenta);
     }
 
     private Vector3 GetDesiredMovement()
     {
-        var planeNormal = transform.up;
+        // 1. Default 
+        var planeNormal = RelativeUp;
         
         var yaw = _mainCamera.eulerAngles.y;
 
         var dot = Vector3.Dot(Vector3.Project(planeNormal, Vector3.up), Vector3.up);
-        var facingUp = dot > 0 || Mathf.Approximately(dot, 0);
-        if (_previousFacingUp != facingUp)
+        // TODO: It maybe because if if the model is past 0 in dot, we are still facing up. We might have to be tight on that by removing that approx 
+        FacingUp = dot > 0 || Mathf.Approximately(dot, 0);
+
+        if (_previousFacingUp != FacingUp)
         {
             var angle = Vector3.Angle(planeNormal, _previousFacingUp ? Vector3.up : Vector3.down);
             if (Mathf.Abs(angle % 90) <= upFlipThreshold && !Mathf.Approximately(angle, 180))
             {
                 // This is still considered facing any ways. This is just for edge cases
-                facingUp = _previousFacingUp;
+                FacingUp = _previousFacingUp;
             }
         }
 
-        _previousFacingUp = facingUp;
-        var worldUp = facingUp ? Vector3.up : Vector3.down;
+        _previousFacingUp = FacingUp;
+        var worldUp = FacingUp ? Vector3.up : Vector3.down;
 
         if (Mathf.Approximately(dot, -1))
         {
             yaw *= -1;
+            OnYawInvertedChange?.Invoke(true);
+        }
+        else
+        {
+            OnYawInvertedChange?.Invoke(false);
         }
 
-        // It seems like we are always rotating from the world up. Its assuming that to be the default
+        // It seems like we are always rotating from the world up. It's assuming that to be the default
         var planeRotation = Quaternion.FromToRotation(worldUp, planeNormal);
         var playerRotation = Quaternion.AngleAxis(yaw, worldUp);
         var movementForward = planeRotation * (playerRotation * Vector3.forward);
+
+        Debug.DrawRay(transform.position, movementForward, Color.blue);
+        Debug.DrawRay(transform.position, worldUp, Color.red);
 
         var movementRotation = Quaternion.LookRotation(movementForward, planeNormal);
         var axisMovement = movementRotation * _inputMovement;
@@ -93,7 +155,7 @@ public class WallMovement : MonoBehaviour
 
     private void GetInputMovement()
     {
-        var inputX = Input.GetAxis("Horizontal");
+        var inputX = Input.GetAxis("Horizontal") * (FacingUp ? 1f : -1f);
         var inputY = Input.GetAxis("Vertical");
         _inputMovement = new Vector3(inputX, 0, inputY);
     }
@@ -114,9 +176,12 @@ public class WallMovement : MonoBehaviour
 
         if (!hitSomething) return;
 
-        _isGrounded = true;
-        _relativeUp = closest.normal;
-        var directionToGround = closest.distance * -_relativeUp;
+        IsGrounded = true;
+        
+        RelativeUp = closest.normal;
+        Debug.DrawRay(transform.position, RelativeUp, Color.yellow);
+        
+        var directionToGround = closest.distance * -RelativeUp;
         //Debug.Log($"distance: {closest.distance - 0.25f}");
         
         // Snap player down
@@ -130,7 +195,7 @@ public class WallMovement : MonoBehaviour
         var hitCount = Physics.SphereCastNonAlloc(
             transform.position, 
             0.45f, 
-            -_relativeUp, 
+            -RelativeUp, 
             hitCache, 
             _groundCheckDistance,
             _environmentLayer);
@@ -139,18 +204,17 @@ public class WallMovement : MonoBehaviour
             .Where(hit => hit.transform != transform);
     }
     
-
     /*private void OnCollisionStay(Collision other)
     {
         if (!other.transform.CompareTag(EnvironmentTag)) return;
-        _isGrounded = true;
-        _relativeUp = other.GetContact(0).normal;
-        Debug.DrawRay(transform.position, _relativeUp, Color.magenta);
+        IsGrounded = true;
+        RelativeUp = other.GetContact(0).normal;
+        Debug.DrawRay(transform.position, RelativeUp, Color.magenta);
     }*/
 
     /*private void OnCollisionExit(Collision other)
     {
         if (!other.transform.CompareTag(EnvironmentTag)) return;
-        _isGrounded = false;
+        IsGrounded = false;
     }*/
 }
