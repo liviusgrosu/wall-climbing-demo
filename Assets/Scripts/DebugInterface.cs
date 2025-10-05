@@ -12,6 +12,7 @@ public class DebugInterface : MonoBehaviour
     [SerializeField] private TMP_Text speedText;
     [SerializeField] private TMP_Text facingUpText;
     [SerializeField] private TMP_Text yawInvertedText;
+    [SerializeField] private TMP_Text yawText;
 
     private void Start()
     {
@@ -20,6 +21,7 @@ public class DebugInterface : MonoBehaviour
         WallMovement.OnSpeedChange += UpdateSpeedText;
         WallMovement.OnFacingUpChange += UpdateFacingUpText;
         WallMovement.OnYawInvertedChange += UpdateYawInvertedText;
+        WallMovement.OnYawChange += UpdateYawText;
     }
 
     private void UpdateRelativeUpText(Vector3 value)
@@ -46,6 +48,11 @@ public class DebugInterface : MonoBehaviour
     {
         yawInvertedText.text = $"Yaw Inverted Up: {GetColouredBoolText(value)}";
     }
+    
+    private void UpdateYawText(float value)
+    {
+        yawText.text = $"Yaw: {value}";
+    } 
 
     private static string GetColouredBoolText(bool value) => 
         value ? $"<color=#26D73A>T</color>" : $"<color=#FF0000>F</color>";

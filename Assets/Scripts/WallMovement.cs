@@ -1,7 +1,17 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.Cinemachine;
 using UnityEngine;
+
+public class CustomRaycastHits
+{
+    public Collider Collider { get; set; }
+    public Vector3 Point { get; set; }
+    public Vector3 Normal { get; set; }
+    public float Distance { get; set; }
+}
 
 [RequireComponent(typeof(Rigidbody))]
 public class WallMovement : MonoBehaviour
@@ -10,13 +20,12 @@ public class WallMovement : MonoBehaviour
     private Transform _mainCamera;
     private Rigidbody _rigidbody;
     private Vector3 _inputMovement;
-
     
     private bool _previousFacingUp;
     private float _groundCheckDistance = 0.5f;
     protected static RaycastHit[] hitCache = new RaycastHit[25];
 
-    public Transform closestPointVisual; 
+    public Transform closestPointVisual;
     
     [Tooltip("Threshold angle for deciding between up and down")]
     [SerializeField]
@@ -68,6 +77,7 @@ public class WallMovement : MonoBehaviour
     public static event Action<float> OnSpeedChange;
     public static event Action<bool> OnFacingUpChange;
     public static event Action<bool> OnYawInvertedChange;
+    public static event Action<float> OnYawChange;
     
     private void Awake()
     {
@@ -102,12 +112,10 @@ public class WallMovement : MonoBehaviour
     private void Update()
     {
         GetInputMovement();
-        //Debug.DrawRay(transform.position, RelativeUp, Color.magenta);
     }
 
     private Vector3 GetDesiredMovement()
     {
-        // 1. Default 
         var planeNormal = RelativeUp;
         
         var yaw = _mainCamera.eulerAngles.y;
@@ -121,7 +129,6 @@ public class WallMovement : MonoBehaviour
             var angle = Vector3.Angle(planeNormal, _previousFacingUp ? Vector3.up : Vector3.down);
             if (Mathf.Abs(angle % 90) <= upFlipThreshold && !Mathf.Approximately(angle, 180))
             {
-                // This is still considered facing any ways. This is just for edge cases
                 FacingUp = _previousFacingUp;
             }
         }
@@ -138,6 +145,8 @@ public class WallMovement : MonoBehaviour
         {
             OnYawInvertedChange?.Invoke(false);
         }
+        
+        OnYawChange?.Invoke(yaw);
 
         // It seems like we are always rotating from the world up. It's assuming that to be the default
         var planeRotation = Quaternion.FromToRotation(worldUp, planeNormal);
@@ -145,7 +154,7 @@ public class WallMovement : MonoBehaviour
         var movementForward = planeRotation * (playerRotation * Vector3.forward);
 
         Debug.DrawRay(transform.position, movementForward, Color.blue);
-        Debug.DrawRay(transform.position, worldUp, Color.red);
+        //Debug.DrawRay(transform.position, worldUp, Color.red);
 
         var movementRotation = Quaternion.LookRotation(movementForward, planeNormal);
         var axisMovement = movementRotation * _inputMovement;
@@ -162,12 +171,16 @@ public class WallMovement : MonoBehaviour
 
     private void GetGroundedState()
     {
-        var closest = new RaycastHit() { distance = Mathf.Infinity };
+        var closest = new CustomRaycastHits
+        {
+            Distance = Mathf.Infinity
+        };
+
         var hitSomething = false;
-        var hits = GetHits();
+        var hits = GetOverlappingHits();
         foreach (var hit in hits)
         {
-            if (hit.distance < closest.distance)
+            if (hit.Distance < closest.Distance)
             {
                 closest = hit;
             }
@@ -178,43 +191,36 @@ public class WallMovement : MonoBehaviour
 
         IsGrounded = true;
         
-        RelativeUp = closest.normal;
-        Debug.DrawRay(transform.position, RelativeUp, Color.yellow);
-        
-        var directionToGround = closest.distance * -RelativeUp;
-        //Debug.Log($"distance: {closest.distance - 0.25f}");
-        
-        // Snap player down
-        transform.position += Vector3.ClampMagnitude(directionToGround, Mathf.Infinity * Time.fixedDeltaTime);
-        closestPointVisual.position = closest.point;
-    }
-
-    private IEnumerable<RaycastHit> GetHits()
-    {
-        hitCache = new RaycastHit[25];
-        var hitCount = Physics.SphereCastNonAlloc(
-            transform.position, 
-            0.45f, 
-            -RelativeUp, 
-            hitCache, 
-            _groundCheckDistance,
-            _environmentLayer);
-
-        return Enumerable.Range(0, hitCount).Select(i => hitCache[i])
-            .Where(hit => hit.transform != transform);
+        RelativeUp = closest.Normal;
+        transform.position = closest.Point + (RelativeUp.normalized * 0.53f);
+        closestPointVisual.position = closest.Point;
     }
     
-    /*private void OnCollisionStay(Collision other)
+    private List<CustomRaycastHits> GetOverlappingHits()
     {
-        if (!other.transform.CompareTag(EnvironmentTag)) return;
-        IsGrounded = true;
-        RelativeUp = other.GetContact(0).normal;
-        Debug.DrawRay(transform.position, RelativeUp, Color.magenta);
-    }*/
+        var overlappingColliders = new Collider[10];
+        var hitCount = Physics.OverlapSphereNonAlloc(
+            transform.position, 
+            0.6f, 
+            overlappingColliders, 
+            _environmentLayer);
 
-    /*private void OnCollisionExit(Collision other)
-    {
-        if (!other.transform.CompareTag(EnvironmentTag)) return;
-        IsGrounded = false;
-    }*/
+        var rayCasts = new List<CustomRaycastHits>();
+
+        for (var i = 0; i < hitCount; i++)
+        {
+            var rayCast = new CustomRaycastHits
+            {
+                Collider = overlappingColliders[i]
+            };
+
+            rayCast.Point = rayCast.Collider.ClosestPoint(transform.position);
+            rayCast.Normal = (transform.position - rayCast.Point).normalized;
+            rayCast.Distance = (transform.position - (rayCast.Point + rayCast.Normal * 0.5f)).magnitude;
+            
+            rayCasts.Add(rayCast);
+        }
+        
+        return rayCasts;
+    }
 }
